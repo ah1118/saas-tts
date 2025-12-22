@@ -2,7 +2,6 @@ import modal
 import numpy as np
 import soundfile as sf
 from pathlib import Path
-import base64
 
 # ====================
 # Modal App
@@ -25,7 +24,7 @@ image = (
         "libsndfile1",
         "ffmpeg",
         "wget",
-        "git"
+        "git",
     )
     .run_commands(
         "python -m pip install 'pip<24'",
@@ -39,7 +38,7 @@ image = (
         "pydantic",
         "python -m spacy download en_core_web_sm",
         "wget -O /root/hubert_base.pt https://huggingface.co/r3gm/sonitranslate_voice_models/resolve/main/hubert_base.pt",
-        "wget -O /root/rmvpe.pt https://huggingface.co/r3gm/sonitranslate_voice_models/resolve/main/rmvpe.pt"
+        "wget -O /root/rmvpe.pt https://huggingface.co/r3gm/sonitranslate_voice_models/resolve/main/rmvpe.pt",
     )
     .env({"HF_HOME": "/cache/huggingface"})
 )
@@ -53,10 +52,10 @@ image = (
     max_containers=1,
     volumes={
         "/models": vol_models,
-        "/cache": vol_hf
+        "/cache": vol_hf,
     },
     timeout=900,
-    scaledown_window=60
+    scaledown_window=60,
 )
 class AudioPipeline:
     @modal.enter()
@@ -66,21 +65,24 @@ class AudioPipeline:
 
         print("🚀 Loading models...")
 
+        # Kokoro TTS
         self.tts = KPipeline(lang_code="a")
 
+        # RVC
         self.rvc = BaseLoader(only_cpu=False)
         self.rvc.apply_conf(
             tag="custom",
             file_model="/models/myvoice.pth",
             file_index="/models/myvoice.index",
             pitch_algo="rmvpe+",
-            pitch_lvl=0
+            pitch_lvl=0,
         )
 
         print("✅ Models ready")
 
     @modal.method()
-    def run(self, text: str):
+    def run(self, text: str) -> bytes:
+        # --- TTS ---
         chunks = []
         for _, _, audio in self.tts(text, voice="af_heart", speed=1):
             chunks.append(audio)
@@ -93,31 +95,28 @@ class AudioPipeline:
         base_wav = "/tmp/base.wav"
         sf.write(base_wav, audio, 24000)
 
+        # --- RVC ---
         result = self.rvc([base_wav], ["custom"], overwrite=True)
         if not result:
             raise RuntimeError("RVC failed")
 
         final_path = Path(result[0])
-        audio_bytes = final_path.read_bytes()
 
-        # Internal return (used by HTTP layer)
-        return {
-            "audio_b64": base64.b64encode(audio_bytes).decode("utf-8")
-        }
+        # ✅ RETURN RAW BYTES (KEY CHANGE)
+        return final_path.read_bytes()
 
 # ======================================================
 # 🔵 SAAS MODE — HTTP API (RETURNS audio/wav)
 # ======================================================
 @app.function(
     image=image,
-    max_containers=1
+    max_containers=1,
 )
 @modal.asgi_app()
 def fastapi_app():
     from fastapi import FastAPI
     from fastapi.responses import Response
     from pydantic import BaseModel
-    import base64
 
     web = FastAPI()
 
@@ -127,16 +126,16 @@ def fastapi_app():
     @web.post("/tts")
     def tts_api(req: TTSRequest):
         pipeline = AudioPipeline()
-        result = pipeline.run.remote(req.text)
 
-        audio_bytes = base64.b64decode(result["audio_b64"])
+        # 🔑 RAW WAV BYTES FROM GPU
+        audio_bytes = pipeline.run.remote(req.text)
 
         return Response(
             content=audio_bytes,
             media_type="audio/wav",
             headers={
                 "Content-Disposition": "inline; filename=tts.wav"
-            }
+            },
         )
 
     return web
