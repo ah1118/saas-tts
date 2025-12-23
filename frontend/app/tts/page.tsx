@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 
 const API_BASE = "https://api.oussamalger6.workers.dev"
@@ -10,31 +10,29 @@ type JobStatus = "idle" | "queued" | "done" | "failed"
 export default function TTSPage() {
   const router = useRouter()
 
-  const [loadingAuth, setLoadingAuth] = useState(true)
-  const [credits, setCredits] = useState<number>(0)
-
+  const [credits, setCredits] = useState<number | null>(null)
   const [text, setText] = useState("")
   const [jobId, setJobId] = useState<string | null>(null)
   const [status, setStatus] = useState<JobStatus>("idle")
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
+  const [loading, setLoading] = useState(false)
 
-  // 🔒 Auth check (COOKIE-BASED)
+  // 🔐 PROTECT PAGE USING COOKIE SESSION
   useEffect(() => {
     fetch(`${API_BASE}/me`, {
       credentials: "include",
     })
-      .then(async res => {
+      .then(async (res) => {
         if (!res.ok) {
-          router.replace("/")
+          router.push("/")
           return
         }
         const data = await res.json()
         setCredits(data.credits)
       })
-      .finally(() => {
-        setLoadingAuth(false)
+      .catch(() => {
+        router.push("/")
       })
   }, [router])
 
@@ -47,6 +45,7 @@ export default function TTSPage() {
         const res = await fetch(`${API_BASE}/tts/${jobId}`, {
           credentials: "include",
         })
+
         const data = await res.json()
 
         if (data.status === "done") {
@@ -73,7 +72,7 @@ export default function TTSPage() {
   async function submitTTS() {
     if (!text.trim()) return
 
-    setSubmitting(true)
+    setLoading(true)
     setError(null)
     setAudioUrl(null)
     setStatus("idle")
@@ -94,31 +93,17 @@ export default function TTSPage() {
 
       setJobId(data.jobId)
       setStatus("queued")
-      setCredits(c => c - text.length)
+      setCredits(c => (c !== null ? c - text.length : c))
     } catch (e: any) {
       setError(e.message || "Something went wrong")
       setStatus("failed")
     } finally {
-      setSubmitting(false)
+      setLoading(false)
     }
   }
 
   function logout() {
-    fetch(`${API_BASE}/logout`, {
-      method: "POST",
-      credentials: "include",
-    }).finally(() => {
-      router.replace("/")
-    })
-  }
-
-  // ⛔ Block render until auth check finishes
-  if (loadingAuth) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        Checking session…
-      </div>
-    )
+    router.push("/")
   }
 
   return (
@@ -127,9 +112,11 @@ export default function TTSPage() {
         <h1 className="text-2xl font-bold">Text to Speech</h1>
 
         <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-600">
-            Credits: <strong>{credits}</strong>
-          </span>
+          {credits !== null && (
+            <span className="text-sm text-gray-600">
+              Credits: <strong>{credits}</strong>
+            </span>
+          )}
           <button onClick={logout} className="text-sm underline">
             Logout
           </button>
@@ -141,16 +128,16 @@ export default function TTSPage() {
         rows={5}
         placeholder="Enter text to synthesize"
         value={text}
-        onChange={e => setText(e.target.value)}
-        disabled={submitting || status === "queued"}
+        onChange={(e) => setText(e.target.value)}
+        disabled={loading || status === "queued"}
       />
 
       <button
         onClick={submitTTS}
-        disabled={submitting || status === "queued"}
+        disabled={loading || status === "queued"}
         className="px-4 py-2 bg-black text-white rounded disabled:opacity-50"
       >
-        {submitting
+        {loading
           ? "Submitting…"
           : status === "queued"
           ? "Processing…"
@@ -158,7 +145,7 @@ export default function TTSPage() {
       </button>
 
       {status === "queued" && (
-        <p className="mt-4 text-gray-600">GPU job running…</p>
+        <p className="mt-4 text-gray-600">GPU job running… please wait</p>
       )}
 
       {error && <p className="mt-4 text-red-600">{error}</p>}
