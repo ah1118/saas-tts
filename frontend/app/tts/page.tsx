@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 
 const API_BASE = "https://api.oussamalger6.workers.dev"
@@ -10,53 +10,43 @@ type JobStatus = "idle" | "queued" | "done" | "failed"
 export default function TTSPage() {
   const router = useRouter()
 
-  const [apiKey, setApiKey] = useState<string | null>(null)
-  const [credits, setCredits] = useState<number | null>(null)
+  const [loadingAuth, setLoadingAuth] = useState(true)
+  const [credits, setCredits] = useState<number>(0)
 
   const [text, setText] = useState("")
   const [jobId, setJobId] = useState<string | null>(null)
   const [status, setStatus] = useState<JobStatus>("idle")
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
-  // 🔒 Protect page + load credits
+  // 🔒 Auth check (COOKIE-BASED)
   useEffect(() => {
-    const key = localStorage.getItem("saas_tts_api_key")
-    if (!key) {
-      router.push("/")
-      return
-    }
-
-    setApiKey(key)
-
-    // load credits
     fetch(`${API_BASE}/me`, {
-      headers: {
-        "Authorization": `Bearer ${key}`,
-      },
+      credentials: "include",
     })
-      .then((r) => r.json())
-      .then((d) => {
-        if (typeof d.credits === "number") {
-          setCredits(d.credits)
+      .then(async res => {
+        if (!res.ok) {
+          router.replace("/")
+          return
         }
+        const data = await res.json()
+        setCredits(data.credits)
       })
-      .catch(() => {})
+      .finally(() => {
+        setLoadingAuth(false)
+      })
   }, [router])
 
   // 🔁 Poll job status
   useEffect(() => {
-    if (!jobId || !apiKey || status !== "queued") return
+    if (!jobId || status !== "queued") return
 
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`${API_BASE}/tts/${jobId}`, {
-          headers: {
-            "Authorization": `Bearer ${apiKey}`,
-          },
+          credentials: "include",
         })
-
         const data = await res.json()
 
         if (data.status === "done") {
@@ -78,12 +68,12 @@ export default function TTSPage() {
     }, 1500)
 
     return () => clearInterval(interval)
-  }, [jobId, apiKey, status])
+  }, [jobId, status])
 
   async function submitTTS() {
-    if (!text.trim() || !apiKey) return
+    if (!text.trim()) return
 
-    setLoading(true)
+    setSubmitting(true)
     setError(null)
     setAudioUrl(null)
     setStatus("idle")
@@ -91,10 +81,8 @@ export default function TTSPage() {
     try {
       const res = await fetch(`${API_BASE}/tts`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
-        },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ text }),
       })
 
@@ -106,21 +94,31 @@ export default function TTSPage() {
 
       setJobId(data.jobId)
       setStatus("queued")
-
-      // deduct credits locally (backend already did)
-      setCredits((c) => (c !== null ? c - text.length : c))
+      setCredits(c => c - text.length)
     } catch (e: any) {
       setError(e.message || "Something went wrong")
       setStatus("failed")
     } finally {
-      setLoading(false)
+      setSubmitting(false)
     }
   }
 
   function logout() {
-    localStorage.removeItem("saas_tts_api_key")
-    localStorage.removeItem("saas_tts_user_id")
-    router.push("/")
+    fetch(`${API_BASE}/logout`, {
+      method: "POST",
+      credentials: "include",
+    }).finally(() => {
+      router.replace("/")
+    })
+  }
+
+  // ⛔ Block render until auth check finishes
+  if (loadingAuth) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        Checking session…
+      </div>
+    )
   }
 
   return (
@@ -129,12 +127,9 @@ export default function TTSPage() {
         <h1 className="text-2xl font-bold">Text to Speech</h1>
 
         <div className="flex items-center gap-4">
-          {credits !== null && (
-            <span className="text-sm text-gray-600">
-              Credits: <strong>{credits}</strong>
-            </span>
-          )}
-
+          <span className="text-sm text-gray-600">
+            Credits: <strong>{credits}</strong>
+          </span>
           <button onClick={logout} className="text-sm underline">
             Logout
           </button>
@@ -146,16 +141,16 @@ export default function TTSPage() {
         rows={5}
         placeholder="Enter text to synthesize"
         value={text}
-        onChange={(e) => setText(e.target.value)}
-        disabled={loading || status === "queued"}
+        onChange={e => setText(e.target.value)}
+        disabled={submitting || status === "queued"}
       />
 
       <button
         onClick={submitTTS}
-        disabled={loading || status === "queued"}
+        disabled={submitting || status === "queued"}
         className="px-4 py-2 bg-black text-white rounded disabled:opacity-50"
       >
-        {loading
+        {submitting
           ? "Submitting…"
           : status === "queued"
           ? "Processing…"
@@ -163,12 +158,10 @@ export default function TTSPage() {
       </button>
 
       {status === "queued" && (
-        <p className="mt-4 text-gray-600">GPU job running… please wait</p>
+        <p className="mt-4 text-gray-600">GPU job running…</p>
       )}
 
-      {error && (
-        <p className="mt-4 text-red-600">{error}</p>
-      )}
+      {error && <p className="mt-4 text-red-600">{error}</p>}
 
       {audioUrl && (
         <audio controls autoPlay className="mt-6 w-full">
