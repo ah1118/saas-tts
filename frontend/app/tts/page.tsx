@@ -5,20 +5,16 @@ import { useRouter } from "next/navigation"
 
 const API_BASE = "https://api.oussamalger6.workers.dev"
 
-type JobStatus = "idle" | "queued" | "done" | "failed"
-
 export default function TTSPage() {
   const router = useRouter()
 
   const [credits, setCredits] = useState<number | null>(null)
   const [text, setText] = useState("")
-  const [jobId, setJobId] = useState<string | null>(null)
-  const [status, setStatus] = useState<JobStatus>("idle")
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
-  // 🔐 PROTECT PAGE USING COOKIE SESSION
+  // 🔐 Protect page using cookie session
   useEffect(() => {
     fetch(`${API_BASE}/me`, {
       credentials: "include",
@@ -36,46 +32,12 @@ export default function TTSPage() {
       })
   }, [router])
 
-  // 🔁 Poll job status
-  useEffect(() => {
-    if (!jobId || status !== "queued") return
-
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_BASE}/tts/${jobId}`, {
-          credentials: "include",
-        })
-
-        const data = await res.json()
-
-        if (data.status === "done") {
-          setAudioUrl(data.url)
-          setStatus("done")
-          clearInterval(interval)
-        }
-
-        if (data.status === "failed") {
-          setError(data.error || "Job failed")
-          setStatus("failed")
-          clearInterval(interval)
-        }
-      } catch {
-        setError("Failed to poll job")
-        setStatus("failed")
-        clearInterval(interval)
-      }
-    }, 1500)
-
-    return () => clearInterval(interval)
-  }, [jobId, status])
-
   async function submitTTS() {
     if (!text.trim()) return
 
     setLoading(true)
     setError(null)
     setAudioUrl(null)
-    setStatus("idle")
 
     try {
       const res = await fetch(`${API_BASE}/tts`, {
@@ -88,21 +50,26 @@ export default function TTSPage() {
       const data = await res.json()
 
       if (!res.ok) {
-        throw new Error(data.error || "TTS request failed")
+        throw new Error(data.error || "TTS failed")
       }
 
-      setJobId(data.jobId)
-      setStatus("queued")
-      setCredits(c => (c !== null ? c - text.length : c))
+      // ✅ Worker returns signed R2 URL
+      setAudioUrl(data.url)
+
+      // Optimistic credit update
+      setCredits((c) => (c !== null ? c - text.length : c))
     } catch (e: any) {
       setError(e.message || "Something went wrong")
-      setStatus("failed")
     } finally {
       setLoading(false)
     }
   }
 
-  function logout() {
+  async function logout() {
+    await fetch(`${API_BASE}/logout`, {
+      method: "POST",
+      credentials: "include",
+    })
     router.push("/")
   }
 
@@ -129,31 +96,33 @@ export default function TTSPage() {
         placeholder="Enter text to synthesize"
         value={text}
         onChange={(e) => setText(e.target.value)}
-        disabled={loading || status === "queued"}
+        disabled={loading}
       />
 
       <button
         onClick={submitTTS}
-        disabled={loading || status === "queued"}
+        disabled={loading}
         className="px-4 py-2 bg-black text-white rounded disabled:opacity-50"
       >
-        {loading
-          ? "Submitting…"
-          : status === "queued"
-          ? "Processing…"
-          : "Generate TTS"}
+        {loading ? "Generating…" : "Generate TTS"}
       </button>
-
-      {status === "queued" && (
-        <p className="mt-4 text-gray-600">GPU job running… please wait</p>
-      )}
 
       {error && <p className="mt-4 text-red-600">{error}</p>}
 
       {audioUrl && (
-        <audio controls autoPlay className="mt-6 w-full">
-          <source src={audioUrl} type="audio/wav" />
-        </audio>
+        <div className="mt-6 space-y-3">
+          <audio controls autoPlay className="w-full">
+            <source src={audioUrl} type="audio/wav" />
+          </audio>
+
+          <a
+            href={audioUrl}
+            download
+            className="inline-block text-sm underline"
+          >
+            Download WAV
+          </a>
+        </div>
       )}
     </main>
   )
