@@ -11,6 +11,8 @@ export default function TTSPage() {
   const router = useRouter()
 
   const [apiKey, setApiKey] = useState<string | null>(null)
+  const [credits, setCredits] = useState<number | null>(null)
+
   const [text, setText] = useState("")
   const [jobId, setJobId] = useState<string | null>(null)
   const [status, setStatus] = useState<JobStatus>("idle")
@@ -18,14 +20,29 @@ export default function TTSPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
-  // 🔒 Protect page
+  // 🔒 Protect page + load credits
   useEffect(() => {
     const key = localStorage.getItem("saas_tts_api_key")
     if (!key) {
       router.push("/")
       return
     }
+
     setApiKey(key)
+
+    // load credits
+    fetch(`${API_BASE}/me`, {
+      headers: {
+        "Authorization": `Bearer ${key}`,
+      },
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (typeof d.credits === "number") {
+          setCredits(d.credits)
+        }
+      })
+      .catch(() => {})
   }, [router])
 
   // 🔁 Poll job status
@@ -89,6 +106,9 @@ export default function TTSPage() {
 
       setJobId(data.jobId)
       setStatus("queued")
+
+      // deduct credits locally (backend already did)
+      setCredits((c) => (c !== null ? c - text.length : c))
     } catch (e: any) {
       setError(e.message || "Something went wrong")
       setStatus("failed")
@@ -107,9 +127,18 @@ export default function TTSPage() {
     <main className="p-10 max-w-2xl mx-auto">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold">Text to Speech</h1>
-        <button onClick={logout} className="text-sm underline">
-          Logout
-        </button>
+
+        <div className="flex items-center gap-4">
+          {credits !== null && (
+            <span className="text-sm text-gray-600">
+              Credits: <strong>{credits}</strong>
+            </span>
+          )}
+
+          <button onClick={logout} className="text-sm underline">
+            Logout
+          </button>
+        </div>
       </div>
 
       <textarea
