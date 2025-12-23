@@ -1,186 +1,156 @@
 export interface Env {
   AUDIO_BUCKET: R2Bucket
   saas_tss_db: D1Database
+  MODAL_CALLBACK_TOKEN: string
+  SESSION_SECRET: string
 }
-
-const MODAL_TTS_URL =
-  "https://oussamalger6-main2--saas-tts-pipeline-fastapi-app.modal.run/tts"
 
 export default {
   async fetch(req: Request, env: Env) {
     const url = new URL(req.url)
 
-    const headers = {
-      ...cors(),
-      "Content-Type": "application/json",
-    }
-
-    // ===========================
-    // CORS PREFLIGHT
-    // ===========================
+    // CORS
     if (req.method === "OPTIONS") {
-      return new Response(null, { headers })
+      return new Response(null, { headers: cors() })
     }
 
-    // ===========================
-    // CREATE API KEY (ONE TIME)
-    // ===========================
-    if (req.method === "POST" && url.pathname === "/create-key") {
-      const userId = crypto.randomUUID()
-      const apiKey = makeApiKey()
-      const apiKeyHash = await sha256Hex(apiKey)
+    // ---------------------------
+    // POST /signup (email + password)
+    // ---------------------------
+    if (req.method === "POST" && url.pathname === "/signup") {
+      const { email, password } = await req.json<{
+        email: string
+        password: string
+      }>()
 
-      const starterCredits = 20_000
-
-      await env.saas_tss_db
-        .prepare(
-          `INSERT INTO users (id, api_key_hash, credits, created_at)
-           VALUES (?, ?, ?, ?)`
-        )
-        .bind(userId, apiKeyHash, starterCredits, new Date().toISOString())
-        .run()
-
-      return new Response(
-        JSON.stringify({
-          userId,
-          apiKey, // SHOWN ONCE
-          credits: starterCredits,
-        }),
-        { headers }
-      )
-    }
-
-    // ===========================
-    // TTS (CREDIT PROTECTED)
-    // ===========================
-    if (req.method === "POST" && url.pathname === "/tts") {
-      const apiKey = getApiKey(req)
-      if (!apiKey) {
-        return new Response(
-          JSON.stringify({ error: "Missing API key" }),
-          { status: 401, headers }
-        )
+      if (!email || !password || password.length < 8) {
+        return json({ error: "Invalid input" }, 400)
       }
 
+      // hash password
+      const salt = crypto.getRandomValues(new Uint8Array(16))
+      const hash = await hashPassword(password, salt)
+      const password_hash =
+        `${hash}:${btoa(String.fromCharCode(...salt))}`
+
+      const userId = crypto.randomUUID()
+
+      // IMPORTANT: api_key_hash is NOT NULL in DB
+      const apiKey = crypto.randomUUID()
       const apiKeyHash = await sha256Hex(apiKey)
+
+      try {
+        await env.saas_tss_db
+          .prepare(
+            `INSERT INTO users
+             (id, email, password_hash, api_key_hash, credits, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            userId,
+            email,
+            password_hash,
+            apiKeyHash,
+            20_000,
+            new Date().toISOString()
+          )
+          .run()
+      } catch (err) {
+        return json({ error: "Email already exists" }, 409)
+      }
+
+      const session = createSession(userId, env.SESSION_SECRET)
+
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: {
+          ...cors(),
+          "Content-Type": "application/json",
+          "Set-Cookie": `session=${session}; HttpOnly; Path=/; SameSite=Lax`,
+        },
+      })
+    }
+
+    // ---------------------------
+    // POST /login
+    // ---------------------------
+    if (req.method === "POST" && url.pathname === "/login") {
+      const { email, password } = await req.json<{
+        email: string
+        password: string
+      }>()
 
       const user = await env.saas_tss_db
-        .prepare("SELECT id, credits FROM users WHERE api_key_hash = ?")
-        .bind(apiKeyHash)
-        .first<{ id: string; credits: number }>()
+        .prepare("SELECT id, password_hash FROM users WHERE email = ?")
+        .bind(email)
+        .first<{ id: string; password_hash: string }>()
 
       if (!user) {
-        return new Response(
-          JSON.stringify({ error: "Invalid API key" }),
-          { status: 401, headers }
-        )
+        return json({ error: "Invalid credentials" }, 401)
       }
 
-      const { text } = await req.json<{ text: string }>()
-      const chars = text.length
-
-      if (user.credits < chars) {
-        return new Response(
-          JSON.stringify({
-            error: "Insufficient credits",
-            remaining: user.credits,
-            needed: chars,
-          }),
-          { status: 402, headers }
-        )
-      }
-
-      // ===========================
-      // CALL MODAL (RAW audio/wav)
-      // ===========================
-      const modalRes = await fetch(MODAL_TTS_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      })
-
-      if (!modalRes.ok) {
-        return new Response(
-          JSON.stringify({ error: "Modal TTS failed" }),
-          { status: 502, headers }
-        )
-      }
-
-      // 🔑 RAW WAV BYTES (NO BASE64)
-      const audioBuffer = await modalRes.arrayBuffer()
-      const audioBytes = new Uint8Array(audioBuffer)
-
-      // ===========================
-      // STORE IN R2 (PRIVATE)
-      // ===========================
-      const audioId = crypto.randomUUID()
-      const key = `users/${user.id}/${audioId}.wav`
-
-      await env.AUDIO_BUCKET.put(key, audioBytes, {
-        httpMetadata: { contentType: "audio/wav" },
-      })
-
-      // ===========================
-      // DEDUCT CREDITS
-      // ===========================
-      await env.saas_tss_db
-        .prepare("UPDATE users SET credits = credits - ? WHERE id = ?")
-        .bind(chars, user.id)
-        .run()
-
-      // ===========================
-      // LOG USAGE
-      // ===========================
-      await env.saas_tss_db
-        .prepare(
-          `INSERT INTO usage_log (id, user_id, chars, created_at)
-           VALUES (?, ?, ?, ?)`
-        )
-        .bind(
-          crypto.randomUUID(),
-          user.id,
-          chars,
-          new Date().toISOString()
-        )
-        .run()
-
-      // ===========================
-      // SIGNED URL (10 MIN)
-      // ===========================
-      const signedUrl = await env.AUDIO_BUCKET.createSignedUrl(key, {
-        expiresIn: 600,
-      })
-
-      return new Response(
-        JSON.stringify({
-          audioId,
-          url: signedUrl,
-        }),
-        { headers }
+      const [storedHash, storedSaltB64] = user.password_hash.split(":")
+      const salt = Uint8Array.from(
+        atob(storedSaltB64),
+        c => c.charCodeAt(0)
       )
+
+      const hash = await hashPassword(password, salt)
+      if (hash !== storedHash) {
+        return json({ error: "Invalid credentials" }, 401)
+      }
+
+      const session = createSession(user.id, env.SESSION_SECRET)
+
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: {
+          ...cors(),
+          "Content-Type": "application/json",
+          "Set-Cookie": `session=${session}; HttpOnly; Path=/; SameSite=Lax`,
+        },
+      })
+    }
+
+    // ---------------------------
+    // GET /me
+    // ---------------------------
+    if (req.method === "GET" && url.pathname === "/me") {
+      const userId = getSessionUserId(req, env.SESSION_SECRET)
+      if (!userId) {
+        return json({ error: "Not authenticated" }, 401)
+      }
+
+      const user = await env.saas_tss_db
+        .prepare("SELECT credits FROM users WHERE id = ?")
+        .bind(userId)
+        .first<{ credits: number }>()
+
+      return json({
+        userId,
+        credits: user?.credits ?? 0,
+      })
     }
 
     return new Response("Not found", { status: 404 })
   },
 }
 
-// ===========================
-// HELPERS
-// ===========================
+// ---------------------------
+// Helpers
+// ---------------------------
 
 function cors() {
   return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Origin": "https://saas-tts.pages.dev",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   }
 }
 
-function getApiKey(req: Request) {
-  const h = req.headers.get("Authorization")
-  if (!h) return null
-  const m = h.match(/^Bearer (.+)$/i)
-  return m ? m[1].trim() : null
+function json(obj: unknown, status = 200) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { ...cors(), "Content-Type": "application/json" },
+  })
 }
 
 async function sha256Hex(input: string) {
@@ -189,11 +159,51 @@ async function sha256Hex(input: string) {
     new TextEncoder().encode(input)
   )
   return [...new Uint8Array(buf)]
-    .map((b) => b.toString(16).padStart(2, "0"))
+    .map(b => b.toString(16).padStart(2, "0"))
     .join("")
 }
 
-function makeApiKey() {
-  const bytes = crypto.getRandomValues(new Uint8Array(32))
-  return btoa(String.fromCharCode(...bytes)).replace(/=/g, "")
+// Password hashing (PBKDF2)
+async function hashPassword(password: string, salt: Uint8Array) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits"]
+  )
+
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt,
+      iterations: 100_000, // ✅ Cloudflare Workers limit
+      hash: "SHA-256",
+    },
+    key,
+    256
+  )
+
+  return btoa(String.fromCharCode(...new Uint8Array(bits)))
+}
+
+
+// Session helpers
+function createSession(userId: string, secret: string) {
+  return btoa(`${userId}.${secret}`)
+}
+
+function getSessionUserId(req: Request, secret: string) {
+  const cookie = req.headers.get("Cookie") || ""
+  const match = cookie.match(/session=([^;]+)/)
+  if (!match) return null
+
+  try {
+    const decoded = atob(match[1])
+    const [userId, sig] = decoded.split(".")
+    if (sig !== secret) return null
+    return userId
+  } catch {
+    return null
+  }
 }
