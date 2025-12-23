@@ -14,7 +14,7 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // 🔐 auto-redirect if already logged in (cookie-based)
+  // 🔐 Auto-redirect if session already exists
   useEffect(() => {
     fetch(`${API_BASE}/me`, {
       credentials: "include",
@@ -27,26 +27,35 @@ export default function AuthPage() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
+
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters")
+      return
+    }
+
     setLoading(true)
     setError(null)
 
     try {
       const res = await fetch(`${API_BASE}/${mode}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include", // 🔥 REQUIRED for HttpOnly cookies
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include", // REQUIRED for cookies
         body: JSON.stringify({ email, password }),
       })
 
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
 
       if (!res.ok) {
-        throw new Error(data.error || "Request failed")
+        throw new Error(data.error || "Authentication failed")
       }
 
+      // ✅ success → go to app
       router.push("/tts")
-    } catch (e: any) {
-      setError(e.message || "Network error")
+    } catch (err: any) {
+      setError(err.message || "Network error")
     } finally {
       setLoading(false)
     }
@@ -58,7 +67,7 @@ export default function AuthPage() {
         onSubmit={submit}
         className="w-full max-w-md bg-white p-8 rounded shadow"
       >
-        <h1 className="text-2xl font-bold mb-4 text-center">
+        <h1 className="text-2xl font-bold mb-6 text-center">
           {mode === "login" ? "Login" : "Create account"}
         </h1>
 
@@ -74,7 +83,8 @@ export default function AuthPage() {
         <input
           type="password"
           required
-          placeholder="Password"
+          minLength={8}
+          placeholder="Password (min 8 characters)"
           className="w-full border p-2 mb-4"
           value={password}
           onChange={e => setPassword(e.target.value)}
