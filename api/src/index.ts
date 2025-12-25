@@ -17,32 +17,32 @@ export default {
     }
 
     // ================= AUTH =================
-    if (req.method === "POST" && url.pathname === "/signup")
+    if (req.method === "POST" && url.pathname === "/api/signup")
       return signup(req, env)
 
-    if (req.method === "POST" && url.pathname === "/login")
+    if (req.method === "POST" && url.pathname === "/api/login")
       return login(req, env)
 
-    if (req.method === "POST" && url.pathname === "/logout")
+    if (req.method === "POST" && url.pathname === "/api/logout")
       return logout(req)
 
-    if (req.method === "GET" && url.pathname === "/me")
+    if (req.method === "GET" && url.pathname === "/api/me")
       return me(req, env)
 
     // ================= TTS ==================
-    if (req.method === "POST" && url.pathname === "/tts")
+    if (req.method === "POST" && url.pathname === "/api/tts")
       return tts(req, env)
 
-    // ================= VIDEO (The Fix) =================
-    // Matches the PUT request seen in your console logs
-    if (req.method === "PUT" && url.pathname === "/video/upload")
+    // ================= VIDEO =================
+    // FIX: Added /api and handles PUT
+    if (req.method === "PUT" && url.pathname === "/api/video/upload")
       return uploadVideo(req, env)
 
     // ================= JOBS ==================
-    if (req.method === "GET" && url.pathname === "/jobs/status")
+    if (req.method === "GET" && url.pathname === "/api/jobs/status")
       return jobStatus(req, env)
 
     // ================= FALLBACK =================
-    return text(req, "Not found", 404, cors(req))
+    return text(req, `Path ${url.pathname} not found`, 404, cors(req))
   },
 }
