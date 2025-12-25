@@ -6,6 +6,10 @@
 		{
 			"binding": "AUDIO_BUCKET",
 			"bucket_name": "saas-tts-audio"
+		},
+		{
+			"binding": "VIDEO_BUCKET",
+			"bucket_name": "saas-video"
 		}
 	],
 	"d1_databases": [
