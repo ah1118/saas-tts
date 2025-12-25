@@ -10,8 +10,8 @@ export function cors(req: Request) {
   return {
     "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS", // <--- MUST HAVE PUT
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, x-target-lang",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
     "Vary": "Origin",
   }
 }
