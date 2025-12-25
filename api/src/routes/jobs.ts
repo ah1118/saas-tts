@@ -3,6 +3,10 @@ import { json } from "../lib/response"
 import { getSessionUserId } from "../lib/session"
 
 export async function jobStatus(req: Request, env: Env) {
+  if (req.method !== "GET") {
+    return json(req, { error: "Method not allowed" }, 405)
+  }
+
   const userId = await getSessionUserId(req, env.SESSION_SECRET)
   if (!userId) return json(req, { error: "Unauthorized" }, 401)
 
@@ -12,17 +16,16 @@ export async function jobStatus(req: Request, env: Env) {
 
   const job = await env.saas_tss_db
     .prepare(
-      `SELECT id, type, status, r2_key, error
-       FROM jobs
+      `SELECT id, status, r2_path, error
+       FROM video_jobs
        WHERE id = ? AND user_id = ?`
     )
     .bind(jobId, userId)
     .first<
       | {
           id: string
-          type: string
           status: string
-          r2_key: string | null
+          r2_path: string | null
           error: string | null
         }
       | null
@@ -32,9 +35,8 @@ export async function jobStatus(req: Request, env: Env) {
 
   return json(req, {
     id: job.id,
-    type: job.type,
     status: job.status,
-    r2_key: job.r2_key,
+    r2_path: job.r2_path,
     error: job.error,
   })
 }

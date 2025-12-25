@@ -5,7 +5,7 @@ import { text } from "./lib/response"
 import { signup, login, logout, me } from "./routes/auth"
 import { tts } from "./routes/tts"
 import { uploadVideo } from "./routes/video"
-import { jobStatus } from "./routes/jobs"   // 👈 ADD THIS
+import { jobStatus } from "./routes/jobs"
 
 export default {
   async fetch(req: Request, env: Env) {
@@ -34,7 +34,7 @@ export default {
       return tts(req, env)
 
     // ================= VIDEO =================
-    if (req.method === "POST" && url.pathname === "/video/upload")
+    if (req.method === "PUT" && url.pathname === "/video/upload")
       return uploadVideo(req, env)
 
     // ================= JOBS ==================
