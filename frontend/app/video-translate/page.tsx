@@ -11,13 +11,19 @@ export default function VideoTranslatePage() {
 
     setStatus("Uploading...")
 
-    const form = new FormData()
-    form.append("video", file)
-
     const res = await fetch("/api/video/upload", {
-      method: "POST",
-      body: form,
+      method: "PUT",
+      headers: {
+        "Content-Type": file.type,
+      },
+      body: file,
     })
+
+    if (!res.ok) {
+      const text = await res.text()
+      setStatus(`Error: ${text}`)
+      return
+    }
 
     const data = await res.json()
     setStatus(data.message || "Done")
