@@ -4,8 +4,8 @@ import { getSessionUserId } from "../lib/session"
 
 // TODO: set to your real Modal endpoint for video pipeline
 const MODAL_VIDEO_ENDPOINT =
-  "https://oussamalger6-main2--video-translate.modal.run"
-
+  "https://oussamalger6--video-translate-subtitles-api.modal.run/video-translate"
+  
 // POST /video/upload  (upload to R2 then notify Modal)
 export async function uploadVideo(req: Request, env: Env) {
   const userId = await getSessionUserId(req, env.SESSION_SECRET)

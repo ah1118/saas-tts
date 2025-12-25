@@ -1,0 +1,204 @@
+[1mdiff --git a/api/src/routes/video.ts b/api/src/routes/video.ts[m
+[1mindex cbd938f..3941591 100644[m
+[1m--- a/api/src/routes/video.ts[m
+[1m+++ b/api/src/routes/video.ts[m
+[36m@@ -4,8 +4,8 @@[m [mimport { getSessionUserId } from "../lib/session"[m
+ [m
+ // TODO: set to your real Modal endpoint for video pipeline[m
+ const MODAL_VIDEO_ENDPOINT =[m
+[31m-  "https://oussamalger6-main2--video-translate.modal.run"[m
+[31m-[m
+[32m+[m[32m  "https://oussamalger6--video-translate-subtitles-api.modal.run/video-translate"[m
+[32m+[m[41m  [m
+ // POST /video/upload  (upload to R2 then notify Modal)[m
+ export async function uploadVideo(req: Request, env: Env) {[m
+   const userId = await getSessionUserId(req, env.SESSION_SECRET)[m
+[1mdiff --git a/api/src/video/upload.ts b/api/src/video/upload.ts[m
+[1mindex 00ba409..43c60e2 100644[m
+[1m--- a/api/src/video/upload.ts[m
+[1m+++ b/api/src/video/upload.ts[m
+[36m@@ -1,31 +1,51 @@[m
+[31m-export async function uploadVideo(req: Request, env: Env) {[m
+[31m-  const form = await req.formData()[m
+[31m-  const file = form.get("video") as File[m
+[32m+[m[32m// api/src/video.ts[m
+ [m
+[31m-  if (!file) {[m
+[31m-    return new Response(JSON.stringify({ error: "No file" }), { status: 400 })[m
+[32m+[m[32mexport async function createVideoUpload(req: Request, env: Env) {[m
+[32m+[m[32m  if (req.method !== "POST") {[m
+[32m+[m[32m    return new Response("Method Not Allowed", { status: 405 })[m
+   }[m
+ [m
+[31m-  const userId = "demo-user" // replace with real auth later[m
+[32m+[m[32m  const userId = "demo-user"[m
+   const jobId = crypto.randomUUID()[m
+[31m-[m
+   const r2Path = `video/${userId}/${jobId}/original.mp4`[m
+ [m
+[31m-  // 1️⃣ Upload to R2[m
+[31m-  await env.VIDEO_BUCKET.put(r2Path, file.stream(), {[m
+[31m-    httpMetadata: { contentType: file.type },[m
+[31m-  })[m
+[32m+[m[32m  const upload = await env.VIDEO_BUCKET.createMultipartUpload(r2Path)[m
+[32m+[m
+[32m+[m[32m  await env.DB.prepare([m
+[32m+[m[32m    `INSERT INTO video_jobs (id, user_id, status, r2_path)[m
+[32m+[m[32m     VALUES (?, ?, ?, ?)`[m
+[32m+[m[32m  )[m
+[32m+[m[32m    .bind(jobId, userId, "uploading", r2Path)[m
+[32m+[m[32m    .run()[m
+[32m+[m
+[32m+[m[32m  return new Response([m
+[32m+[m[32m    JSON.stringify({[m
+[32m+[m[32m      jobId,[m
+[32m+[m[32m      r2Path,[m
+[32m+[m[32m      uploadId: upload.uploadId,[m
+[32m+[m[32m      key: r2Path,[m
+[32m+[m[32m    }),[m
+[32m+[m[32m    { headers: { "Content-Type": "application/json" } }[m
+[32m+[m[32m  )[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mexport async function completeVideoUpload(req: Request, env: Env) {[m
+[32m+[m[32m  if (req.method !== "POST") {[m
+[32m+[m[32m    return new Response("Method Not Allowed", { status: 405 })[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  const { jobId, r2Path } = await req.json()[m
+ [m
+[31m-  // 2️⃣ Create DB job (simplified)[m
+   await env.DB.prepare([m
+[31m-    `INSERT INTO video_jobs (id, user_id, status) VALUES (?, ?, ?)`[m
+[31m-  ).bind(jobId, userId, "queued").run()[m
+[32m+[m[32m    `UPDATE video_jobs SET status = ? WHERE id = ?`[m
+[32m+[m[32m  )[m
+[32m+[m[32m    .bind("queued", jobId)[m
+[32m+[m[32m    .run()[m
+ [m
+[31m-  // 3️⃣ Call Modal[m
+   await fetch(env.MODAL_VIDEO_ENDPOINT, {[m
+     method: "POST",[m
+     headers: {[m
+[31m-      "Authorization": `Bearer ${env.MODAL_TOKEN}`,[m
+[32m+[m[32m      Authorization: `Bearer ${env.MODAL_TOKEN}`,[m
+       "Content-Type": "application/json",[m
+     },[m
+     body: JSON.stringify({[m
+[36m@@ -35,10 +55,7 @@[m [mexport async function uploadVideo(req: Request, env: Env) {[m
+   })[m
+ [m
+   return new Response([m
+[31m-    JSON.stringify({[m
+[31m-      message: "Video uploaded. Job started.",[m
+[31m-      jobId,[m
+[31m-    }),[m
+[32m+[m[32m    JSON.stringify({ ok: true, jobId }),[m
+     { headers: { "Content-Type": "application/json" } }[m
+   )[m
+ }[m
+[1mdiff --git a/modal/app.py b/modal/app.py[m
+[1mindex f055e2f..e680835 100644[m
+[1m--- a/modal/app.py[m
+[1m+++ b/modal/app.py[m
+[36m@@ -1,5 +1,6 @@[m
+ import modal[m
+ import os[m
+[32m+[m[32mimport uuid[m
+ import numpy as np[m
+ import soundfile as sf[m
+ from pathlib import Path[m
+[36m@@ -23,15 +24,14 @@[m [mimage = ([m
+     .apt_install("espeak-ng", "libsndfile1", "ffmpeg", "wget", "git")[m
+     .run_commands([m
+         "python -m pip install 'pip<24'",[m
+[31m-        # NOTE: spacy model download requires spacy installed. If kokoro already depends on spacy,[m
+[31m-        # this is fine. If it fails, add 'spacy' explicitly.[m
+         "pip install "[m
+         "'torch<2.6' "[m
+         "'numpy<2' "[m
+         "infer-rvc-python "[m
+         "kokoro "[m
+[31m-        "soundfile",[m
+[31m-        # If this line fails, see note above.[m
+[32m+[m[32m        "soundfile "[m
+[32m+[m[32m        "spacy "[m
+[32m+[m[32m        "fastapi",[m
+         "python -m spacy download en_core_web_sm",[m
+         "wget -O /root/hubert_base.pt https://huggingface.co/r3gm/sonitranslate_voice_models/resolve/main/hubert_base.pt",[m
+         "wget -O /root/rmvpe.pt https://huggingface.co/r3gm/sonitranslate_voice_models/resolve/main/rmvpe.pt",[m
+[36m@@ -40,105 +40,97 @@[m [mimage = ([m
+ )[m
+ [m
+ # ======================================================[m
+[31m-# GPU Pipeline Class (warm container)[m
+[32m+[m[32m# ONE-SHOT GPU FUNCTION (NO WARM CONTAINER)[m
+ # ======================================================[m
+[31m-@app.cls([m
+[32m+[m[32m@app.function([m
+     image=image,[m
+[31m-    gpu="T4",[m
+[31m-    max_containers=1,              # keep ONE warm GPU container[m
+[31m-    volumes={"/models": vol_models, "/cache": vol_hf},[m
+[32m+[m[32m    gpu="T4",                    # GPU USED ONLY HERE[m
+[32m+[m[32m    max_containers=1,[m
+     timeout=900,[m
+[31m-    scaledown_window=60,[m
+[32m+[m[32m    scaledown_window=2,          # 🔥 GPU DIES IMMEDIATELY[m
+[32m+[m[32m    volumes={[m
+[32m+[m[32m        "/models": vol_models,[m
+[32m+[m[32m        "/cache": vol_hf,[m
+[32m+[m[32m    },[m
+ )[m
+[31m-class AudioPipeline:[m
+[31m-    @modal.enter()[m
+[31m-    def setup(self):[m
+[31m-        from kokoro import KPipeline[m
+[31m-        from infer_rvc_python import BaseLoader[m
+[31m-[m
+[31m-        print("🚀 Loading models...")[m
+[31m-[m
+[31m-        # Kokoro TTS[m
+[31m-        self.tts = KPipeline(lang_code="a")[m
+[31m-[m
+[31m-        # RVC[m
+[31m-        model_path = "/models/myvoice.pth"[m
+[31m-        index_path = "/models/myvoice.index"[m
+[31m-[m
+[31m-        if not os.path.exists(model_path):[m
+[31m-            raise RuntimeError(f"Missing RVC model: {model_path}")[m
+[31m-        if not os.path.exists(index_path):[m
+[31m-            raise RuntimeError(f"Missing RVC index: {index_path}")[m
+[31m-[m
+[31m-        self.rvc = BaseLoader(only_cpu=False)[m
+[31m-        self.rvc.apply_conf([m
+[31m-            tag="custom",[m
+[31m-            file_model=model_path,[m
+[31m-            file_index=index_path,[m
+[31m-            pitch_algo="rmvpe+",[m
+[31m-            pitch_lvl=0,[m
+[31m-        )[m
+[31m-[m
+[31m-        print("✅ Models ready")[m
+[31m-[m
+[31m-    @modal.method()[m
+[31m-    def synth_wav_bytes(self, text: str) -> bytes:[m
+[31m-        # --- TTS ---[m
+[31m-        chunks = [][m
+[31m-        for _, _, audio in self.tts(text, voice="af_heart", speed=1):[m
+[31m-            chunks.append(audio)[m
+[31m-[m
+[31m-        if not chunks:[m
+[31m-            raise RuntimeError("No TTS output")[m
+[31m-[m
+[31m-        audio = np.concatenate(chunks)[m
+[31m-[m
+[31m-        base_wav = "/tmp/base.wav"[m
+[31m-        sf.write(base_wav, audio, 24000)[m
+[32m+[m[32mdef generate_wav(text: str) -> bytes:[m
+[32m+[m[32m    from kokoro import KPipeline[m
+[32m+[m[32m    from infer_rvc_python import BaseLoader[m
+[32m+[m
+[32m+[m[32m    print("🚀 GPU START — loading models")[m
+[32m+[m
+[32m+[m[32m 
