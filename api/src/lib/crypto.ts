@@ -4,7 +4,7 @@ export async function sha256Hex(input: string) {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("")
 }
 
-// PBKDF2 password hash (Workers friendly)
+// PBKDF2 password hash (Workers friendly) - KEPT YOUR SECURE VERSION
 export async function hashPassword(password: string, salt: Uint8Array) {
   const key = await crypto.subtle.importKey(
     "raw",
@@ -21,6 +21,25 @@ export async function hashPassword(password: string, salt: Uint8Array) {
   )
 
   return btoa(String.fromCharCode(...new Uint8Array(bits)))
+}
+
+// NEW: Missing verify function for Login
+export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  const [hash, saltB64] = storedHash.split(":")
+  if (!hash || !saltB64) return false
+  
+  const salt = Uint8Array.from(atob(saltB64), (c) => c.charCodeAt(0))
+  const newHash = await hashPassword(password, salt)
+  return newHash === hash
+}
+
+// NEW: Missing validation functions
+export function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+}
+
+export function isValidPassword(password: string): boolean {
+  return password.length >= 8
 }
 
 // timing-safe compare for signatures

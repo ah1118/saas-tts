@@ -1,6 +1,8 @@
 import { json, safeJson } from "../lib/response";
-import { isValidEmail, isValidPassword, hashPassword, verifyPassword, sha256Hex } from "../lib/utils";
-import { createSessionToken, makeSessionCookie } from "../lib/auth";
+// Corrected to match your crypto.ts file
+import { isValidEmail, isValidPassword, hashPassword, verifyPassword, sha256Hex } from "../lib/crypto";
+// Corrected to match your session.ts file
+import { createSessionToken, makeSessionCookie } from "../lib/session";
 import type { Env } from "../types";
 
 // 1. SIGNUP
@@ -21,7 +23,6 @@ export async function signup(req: Request, env: Env) {
 
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const hash = await hashPassword(password, salt);
-  // Using btoa/Uint8Array for standard Worker compatibility if Buffer is tricky
   const saltB64 = btoa(String.fromCharCode(...salt));
   const password_hash = `${hash}:${saltB64}`;
 
@@ -45,14 +46,18 @@ export async function signup(req: Request, env: Env) {
   return json(req, { ok: true }, 200, { "Set-Cookie": makeSessionCookie(session) });
 }
 
-// 2. LOGIN (Missing Export)
+// 2. LOGIN
 export async function login(req: Request, env: Env) {
   const body = await safeJson(req);
   const { email, password } = body;
 
+  if (!email || !password) {
+    return json(req, { error: "Email and password required" }, 400);
+  }
+
   const user = await env.saas_tss_db
     .prepare("SELECT * FROM users WHERE email = ?")
-    .bind(email?.trim().toLowerCase())
+    .bind(email.trim().toLowerCase())
     .first();
 
   if (!user) {
@@ -68,15 +73,22 @@ export async function login(req: Request, env: Env) {
   return json(req, { ok: true }, 200, { "Set-Cookie": makeSessionCookie(session) });
 }
 
-// 3. LOGOUT (Missing Export)
+// 3. LOGOUT
 export async function logout(req: Request) {
   return json(req, { ok: true }, 200, { 
     "Set-Cookie": "session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0" 
   });
 }
 
-// 4. ME (Missing Export)
+// 4. ME
 export async function me(req: Request, env: Env) {
-  // Simple check for now to fix build
+  // This verifies the user is actually logged in
+  const cookieHeader = req.headers.get("Cookie") || "";
+  const token = cookieHeader.split(";").find(c => c.trim().startsWith("session="))?.split("=")[1];
+
+  if (!token) {
+    return json(req, { error: "Not authenticated" }, 401);
+  }
+
   return json(req, { status: "authenticated" }, 200);
 }
