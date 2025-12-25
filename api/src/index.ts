@@ -11,7 +11,7 @@ export default {
   async fetch(req: Request, env: Env) {
     const url = new URL(req.url)
 
-    // ================= CORS =================
+    // ================= CORS (Preflight) =================
     if (req.method === "OPTIONS") {
       return new Response(null, { headers: cors(req) })
     }
@@ -33,8 +33,9 @@ export default {
     if (req.method === "POST" && url.pathname === "/tts")
       return tts(req, env)
 
-    // ================= VIDEO =================
-    if (req.method === "PUT" && url.pathname === "/api/video/upload")
+    // ================= VIDEO (The Fix) =================
+    // Matches the PUT request seen in your console logs
+    if (req.method === "PUT" && url.pathname === "/video/upload")
       return uploadVideo(req, env)
 
     // ================= JOBS ==================

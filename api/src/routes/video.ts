@@ -1,58 +1,48 @@
-import type { Env } from "../types"
-import { json } from "../lib/response"
-import { getSessionUserId } from "../lib/session"
+import { cors } from "../lib/cors";
 
-// Modal endpoint
-const MODAL_VIDEO_ENDPOINT =
-  "https://oussamalger6--video-translate-subtitles-api.modal.run/video-translate"
+/**
+ * Handles video upload by forwarding raw bytes to Modal GPU.
+ * Uses streaming to stay within Cloudflare Worker memory limits.
+ */
+export async function uploadVideo(req: Request, env: any) {
+  const MODAL_ENDPOINT = "https://oussamalger6--video-translate-subtitles-api.modal.run/video-translate";
 
-// PUT /video/upload  (Cloudflare-safe raw stream upload)
-export async function uploadVideo(req: Request, env: Env) {
-  if (req.method !== "PUT") {
-    return json(req, { error: "Method not allowed" }, 405)
-  }
-
-  const userId = await getSessionUserId(req, env.SESSION_SECRET)
-  if (!userId) return json(req, { error: "Unauthorized" }, 401)
-
+  // 1. Check if body exists
   if (!req.body) {
-    return json(req, { error: "No request body" }, 400)
+    return new Response(JSON.stringify({ error: "No video data received" }), {
+      status: 400,
+      headers: { ...cors(req), "Content-Type": "application/json" },
+    });
   }
 
-  const contentType =
-    req.headers.get("content-type") || "video/mp4"
+  try {
+    // 2. Forward the stream to Modal
+    const modalResponse = await fetch(MODAL_ENDPOINT, {
+      method: "POST", 
+      headers: {
+        "Content-Type": req.headers.get("Content-Type") || "video/mp4",
+      },
+      body: req.body,
+      // @ts-ignore - Required for streaming in Cloudflare Workers
+      duplex: "half",
+    });
 
-  const jobId = crypto.randomUUID()
-  const key = `video/${userId}/${jobId}/original.mp4`
+    const result = await modalResponse.json();
 
-  // stream directly to R2 (NO formData)
-  await env.VIDEO_BUCKET.put(key, req.body, {
-    httpMetadata: { contentType },
-  })
+    // 3. Return Modal's job_id to the frontend
+    return new Response(JSON.stringify(result), {
+      status: modalResponse.status,
+      headers: { ...cors(req), "Content-Type": "application/json" },
+    });
 
-  // create job
-  await env.saas_tss_db
-    .prepare(
-      `INSERT INTO video_jobs (id, user_id, status, created_at)
-       VALUES (?, ?, ?, ?)`
-    )
-    .bind(jobId, userId, "queued", new Date().toISOString())
-    .run()
-
-  // notify Modal
-  await fetch(MODAL_VIDEO_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      job_id: jobId,
-      r2_key: key,
-      user_id: userId,
-    }),
-  })
-
-  return json(
-    req,
-    { ok: true, jobId, message: "Video uploaded and job started" },
-    200
-  )
+  } catch (err: any) {
+    return new Response(JSON.stringify({ 
+      error: "Gateway Error", 
+      message: "Worker could not reach Modal GPU service",
+      details: err.message 
+    }), {
+      status: 502,
+      headers: { ...cors(req), "Content-Type": "application/json" },
+    });
+  }
 }
