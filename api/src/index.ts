@@ -34,7 +34,7 @@ export default {
       return tts(req, env)
 
     // ================= VIDEO =================
-    if (req.method === "PUT" && url.pathname === "/video/upload")
+    if (req.method === "PUT" && url.pathname === "/api/video/upload")
       return uploadVideo(req, env)
 
     // ================= JOBS ==================
